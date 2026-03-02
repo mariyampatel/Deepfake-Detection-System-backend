@@ -1,69 +1,101 @@
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
-from PIL import Image
-import io
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-import os
+import cv2
+import tempfile
 
 app = FastAPI()
 
-# -----------------------------
-# Load Model (Root Folder)
-# -----------------------------
-model_path = "image_deepfake_model.h5"
+---------------- CORS ----------------
 
-try:
-    if os.path.exists(model_path):
-        model = load_model(model_path)
-        print("Model loaded successfully")
-    else:
-        print(f"Model file not found at: {model_path}")
-        model = None
-except Exception as e:
-    print("Error loading model:", e)
-    model = None
+app.add_middleware(
+CORSMiddleware,
+allow_origins=[""],
+allow_credentials=True,
+allow_methods=[""],
+allow_headers=["*"],
+)
 
-# -----------------------------
-# Image Preprocessing Function
-# -----------------------------
-def preprocess_image(image: Image.Image):
-    image = image.resize((224, 224))  # Change size if your model different
-    image = np.array(image) / 255.0
-    image = np.expand_dims(image, axis=0)
-    return image
+---------------- Dummy Model Logic ----------------
 
-# -----------------------------
-# Home Route
-# -----------------------------
+def predict_frame(image):
+image = cv2.resize(image, (224, 224))
+mean_pixel = np.mean(image)
+
+if mean_pixel > 127:  
+    return "Real", 0.85  
+else:  
+    return "Fake", 0.90
+
+================= IMAGE ENDPOINT =================
+
+@app.post("/predict-image")
+async def predict_image(file: UploadFile = File(...)):
+
+contents = await file.read()  
+np_arr = np.frombuffer(contents, np.uint8)  
+image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)  
+
+if image is None:  
+    return {"error": "Invalid image file"}  
+
+prediction, confidence = predict_frame(image)  
+
+return {  
+    "prediction": prediction,  
+    "confidence": float(confidence)  
+}
+
+================= VIDEO ENDPOINT =================
+
+@app.post("/predict-video")
+async def predict_video(file: UploadFile = File(...)):
+
+# Save uploaded video temporarily  
+temp_video = tempfile.NamedTemporaryFile(delete=False)  
+temp_video.write(await file.read())  
+temp_video.close()  
+
+cap = cv2.VideoCapture(temp_video.name)  
+
+predictions = []  
+confidences = []  
+frame_count = 0  
+
+while cap.isOpened():  
+    ret, frame = cap.read()  
+    if not ret:  
+        break  
+
+    # Process every 10th frame  
+    if frame_count % 10 == 0:  
+        prediction, confidence = predict_frame(frame)  
+        predictions.append(prediction)  
+        confidences.append(confidence)  
+
+    frame_count += 1  
+
+    # Limit frames for performance  
+    if frame_count >= 200:  
+        break  
+
+cap.release()  
+
+if not predictions:  
+    return {"error": "Could not process video"}  
+
+# Majority Voting  
+final_prediction = max(set(predictions), key=predictions.count)  
+
+# Average Confidence  
+avg_confidence = sum(confidences) / len(confidences)  
+
+return {  
+    "prediction": final_prediction,  
+    "confidence": float(avg_confidence)  
+}
+
 @app.get("/")
 def home():
-    return {"message": "Deepfake Detection API is Running Successfully 🚀"}
-
-# -----------------------------
-# Prediction Route
-# -----------------------------
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    if model is None:
-        return JSONResponse({"error": "Model not loaded properly"})
-
-    try:
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-        processed_image = preprocess_image(image)
-
-        prediction = model.predict(processed_image)
-
-        confidence = float(prediction[0][0])
-
-        result = "Fake" if confidence > 0.5 else "Real"
-
-        return {
-            "prediction": result,
-            "confidence": round(confidence, 4)
-        }
-
-    except Exception as e:
-        return JSONResponse({"error": str(e)})
+return {"message": "Deepfake Detection Backend Running"}
+Main.py
