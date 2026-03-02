@@ -5,15 +5,22 @@ from PIL import Image
 import io
 import tensorflow as tf
 from tensorflow.keras.models import load_model
+import os
 
 app = FastAPI()
 
 # -----------------------------
 # Load Model (Root Folder)
 # -----------------------------
+model_path = "image_deepfake_model.h5"
+
 try:
-    model = load_model("image_deepfake_model.h5")
-    print("Model loaded successfully")
+    if os.path.exists(model_path):
+        model = load_model(model_path)
+        print("Model loaded successfully")
+    else:
+        print(f"Model file not found at: {model_path}")
+        model = None
 except Exception as e:
     print("Error loading model:", e)
     model = None
@@ -22,7 +29,7 @@ except Exception as e:
 # Image Preprocessing Function
 # -----------------------------
 def preprocess_image(image: Image.Image):
-    image = image.resize((224, 224))   # Change size if your model different
+    image = image.resize((224, 224))  # Change size if your model different
     image = np.array(image) / 255.0
     image = np.expand_dims(image, axis=0)
     return image
@@ -51,10 +58,7 @@ async def predict(file: UploadFile = File(...)):
 
         confidence = float(prediction[0][0])
 
-        if confidence > 0.5:
-            result = "Fake"
-        else:
-            result = "Real"
+        result = "Fake" if confidence > 0.5 else "Real"
 
         return {
             "prediction": result,
