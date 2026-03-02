@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
 import tempfile
+from tensorflow.keras.models import load_model
 
 app = FastAPI()
 
@@ -15,15 +16,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- Dummy Model Logic ----------------
-def predict_frame(image):
-    image = cv2.resize(image, (224, 224))
-    mean_pixel = np.mean(image)
+# ---------------- LOAD TRAINED MODEL ----------------
+model = load_model("model/image_deepfake_model.h5")
 
-    if mean_pixel > 127:
-        return "Real", 0.85
+# ---------------- PREPROCESS FUNCTION ----------------
+def preprocess_image(image):
+    image = cv2.resize(image, (224, 224))
+    image = image / 255.0
+    image = np.expand_dims(image, axis=0)
+    return image
+
+# ---------------- REAL MODEL PREDICTION ----------------
+def predict_frame(image):
+    processed = preprocess_image(image)
+    prediction = model.predict(processed)[0][0]
+
+    if prediction > 0.5:
+        return "Fake", float(prediction)
     else:
-        return "Fake", 0.90
+        return "Real", float(1 - prediction)
 
 
 # ================= IMAGE ENDPOINT =================
@@ -41,7 +52,7 @@ async def predict_image(file: UploadFile = File(...)):
 
     return {
         "prediction": prediction,
-        "confidence": float(confidence)
+        "confidence": confidence
     }
 
 
@@ -49,7 +60,6 @@ async def predict_image(file: UploadFile = File(...)):
 @app.post("/predict-video")
 async def predict_video(file: UploadFile = File(...)):
 
-    # Save uploaded video temporarily
     temp_video = tempfile.NamedTemporaryFile(delete=False)
     temp_video.write(await file.read())
     temp_video.close()
@@ -65,7 +75,6 @@ async def predict_video(file: UploadFile = File(...)):
         if not ret:
             break
 
-        # Process every 10th frame
         if frame_count % 10 == 0:
             prediction, confidence = predict_frame(frame)
             predictions.append(prediction)
@@ -73,7 +82,6 @@ async def predict_video(file: UploadFile = File(...)):
 
         frame_count += 1
 
-        # Limit frames for performance
         if frame_count >= 200:
             break
 
@@ -82,10 +90,7 @@ async def predict_video(file: UploadFile = File(...)):
     if not predictions:
         return {"error": "Could not process video"}
 
-    # Majority Voting
     final_prediction = max(set(predictions), key=predictions.count)
-
-    # Average Confidence
     avg_confidence = sum(confidences) / len(confidences)
 
     return {
@@ -96,4 +101,4 @@ async def predict_video(file: UploadFile = File(...)):
 
 @app.get("/")
 def home():
-    return {"message": "Deepfake Detection Backend Running"}
+    return {"message": "Deepfake Detection Backend Running with AI Model"}
