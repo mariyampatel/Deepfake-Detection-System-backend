@@ -1,101 +1,85 @@
 from fastapi import FastAPI, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import numpy as np
-import cv2
-import tempfile
+from PIL import Image
+import io
+import tensorflow as tf
+import os
 
 app = FastAPI()
 
----------------- CORS ----------------
+# -----------------------------
+# Load Model (With Path Checking)
+# -----------------------------
+# Updated path to look inside the 'model' folder
+MODEL_PATH = "model/image_deepfake_model.h5"
+model = None
 
-app.add_middleware(
-CORSMiddleware,
-allow_origins=[""],
-allow_credentials=True,
-allow_methods=[""],
-allow_headers=["*"],
-)
+if os.path.exists(MODEL_PATH):
+    try:
+        model = tf.keras.models.load_model(MODEL_PATH)
+        print("✅ Model loaded successfully!")
+    except Exception as e:
+        print(f"❌ Error loading model file: {e}")
+else:
+    print(f"❌ ALERT: Model file NOT FOUND at {MODEL_PATH}. Please check the folder!")
 
----------------- Dummy Model Logic ----------------
+# -----------------------------
+# Image Preprocessing Function
+# -----------------------------
+def preprocess_image(image: Image.Image):
+    image = image.resize((224, 224))   # Ensure this matches your model's training size exactly!
+    image_array = np.array(image) / 255.0
+    
+    # Ensure it's a 3-channel RGB image before sending to model
+    if len(image_array.shape) != 3 or image_array.shape[2] != 3:
+         raise ValueError("Uploaded image is not in standard RGB format.")
+         
+    image_array = np.expand_dims(image_array, axis=0)
+    return image_array
 
-def predict_frame(image):
-image = cv2.resize(image, (224, 224))
-mean_pixel = np.mean(image)
-
-if mean_pixel > 127:  
-    return "Real", 0.85  
-else:  
-    return "Fake", 0.90
-
-================= IMAGE ENDPOINT =================
-
-@app.post("/predict-image")
-async def predict_image(file: UploadFile = File(...)):
-
-contents = await file.read()  
-np_arr = np.frombuffer(contents, np.uint8)  
-image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)  
-
-if image is None:  
-    return {"error": "Invalid image file"}  
-
-prediction, confidence = predict_frame(image)  
-
-return {  
-    "prediction": prediction,  
-    "confidence": float(confidence)  
-}
-
-================= VIDEO ENDPOINT =================
-
-@app.post("/predict-video")
-async def predict_video(file: UploadFile = File(...)):
-
-# Save uploaded video temporarily  
-temp_video = tempfile.NamedTemporaryFile(delete=False)  
-temp_video.write(await file.read())  
-temp_video.close()  
-
-cap = cv2.VideoCapture(temp_video.name)  
-
-predictions = []  
-confidences = []  
-frame_count = 0  
-
-while cap.isOpened():  
-    ret, frame = cap.read()  
-    if not ret:  
-        break  
-
-    # Process every 10th frame  
-    if frame_count % 10 == 0:  
-        prediction, confidence = predict_frame(frame)  
-        predictions.append(prediction)  
-        confidences.append(confidence)  
-
-    frame_count += 1  
-
-    # Limit frames for performance  
-    if frame_count >= 200:  
-        break  
-
-cap.release()  
-
-if not predictions:  
-    return {"error": "Could not process video"}  
-
-# Majority Voting  
-final_prediction = max(set(predictions), key=predictions.count)  
-
-# Average Confidence  
-avg_confidence = sum(confidences) / len(confidences)  
-
-return {  
-    "prediction": final_prediction,  
-    "confidence": float(avg_confidence)  
-}
-
+# -----------------------------
+# Home Route
+# -----------------------------
 @app.get("/")
 def home():
-return {"message": "Deepfake Detection Backend Running"}
-Main.py
+    return {"message": "Deepfake Detection API is Running Successfully 🚀"}
+
+# -----------------------------
+# Prediction Route
+# -----------------------------
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    if model is None:
+        return JSONResponse(status_code=500, content={"error": "Model not loaded. Check server terminal for reasons."})
+
+    # Basic check to ensure an image is uploaded
+    if not file.content_type.startswith("image/"):
+        return JSONResponse(status_code=400, content={"error": "Invalid file format. Please upload an image."})
+
+    try:
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        processed_image = preprocess_image(image)
+
+        # Using model(image) is faster and safer for single predictions than model.predict()
+        prediction = model(processed_image, training=False)
+        
+        # Convert TensorFlow tensor to float
+        confidence = float(prediction[0][0])
+
+        if confidence > 0.5:
+            result = "Fake"
+        else:
+            result = "Real"
+
+        return {
+            "prediction": result,
+            "confidence": round(confidence, 4)
+        }
+
+    except ValueError as ve:
+         return JSONResponse(status_code=400, content={"error": str(ve)})
+    except Exception as e:
+        # This will return the EXACT error to your Postman/Frontend
+        return JSONResponse(status_code=500, content={"error": f"Internal Server Error: {str(e)}"})
