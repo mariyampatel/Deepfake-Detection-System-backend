@@ -1,8 +1,9 @@
 fastapi
 uvicorn
 python-multipart
-opencv-python
+opencv-python-headless
 numpy
 pillow
 torch
 torchvision
+tensorflow==2.15.0
