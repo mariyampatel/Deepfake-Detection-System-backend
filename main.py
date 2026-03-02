@@ -11,8 +11,8 @@ app = FastAPI()
 # -----------------------------
 # Load Model (With Path Checking)
 # -----------------------------
-# Updated path to look inside the 'model' folder
-MODEL_PATH = "model/image_deepfake_model.h5"
+# Updated path to look in the main folder, perfectly matching your GitHub!
+MODEL_PATH = "image_deepfake_model.h5"
 model = None
 
 if os.path.exists(MODEL_PATH):
